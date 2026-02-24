@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MoneyTracker</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1 id="header-title" onclick="showMonthsList()">MoneyTracker</h1>
+      <p class="subtitle">Track your shifts &amp; earnings</p>
+    </header>
+
+    <!-- View: Months List -->
+    <section id="view-months" class="view active">
+      <div class="card">
+        <div class="card-header">
+          <h2>Your Months</h2>
+          <button class="btn btn-primary" onclick="showNewMonthForm()">+ New Month</button>
+        </div>
+
+        <div id="new-month-form" class="new-month-form hidden">
+          <select id="new-month-select">
+            <option value="1">January</option>
+            <option value="2">February</option>
+            <option value="3">March</option>
+            <option value="4">April</option>
+            <option value="5">May</option>
+            <option value="6">June</option>
+            <option value="7">July</option>
+            <option value="8">August</option>
+            <option value="9">September</option>
+            <option value="10">October</option>
+            <option value="11">November</option>
+            <option value="12">December</option>
+          </select>
+          <input type="number" id="new-year-input" placeholder="Year" min="2020" max="2099">
+          <button class="btn btn-success" onclick="createMonth()">Create</button>
+          <button class="btn btn-ghost" onclick="hideNewMonthForm()">Cancel</button>
+        </div>
+
+        <div id="months-list" class="months-list">
+          <p class="empty-state">Loading...</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- View: Month Detail -->
+    <section id="view-month-detail" class="view">
+      <div class="card">
+        <div class="card-header">
+          <button class="btn btn-ghost btn-back" onclick="showMonthsList()">&larr; Back</button>
+          <h2 id="month-detail-title"></h2>
+          <div class="header-actions">
+            <span id="month-status-badge" class="badge"></span>
+            <button id="btn-edit-month" class="btn btn-secondary hidden" onclick="reopenMonth()">Edit</button>
+          </div>
+        </div>
+
+        <!-- Shift Entry Form -->
+        <div id="shift-form-container" class="shift-form hidden">
+          <h3 id="shift-form-title">Add New Shift</h3>
+          <div class="form-grid">
+            <div class="form-group">
+              <label for="shift-date">Date</label>
+              <input type="date" id="shift-date">
+            </div>
+            <div class="form-group">
+              <label for="shift-start">From</label>
+              <input type="time" id="shift-start">
+            </div>
+            <div class="form-group">
+              <label for="shift-end">To</label>
+              <input type="time" id="shift-end">
+            </div>
+            <div class="form-group">
+              <label for="shift-break-start">Break From</label>
+              <input type="time" id="shift-break-start" placeholder="Optional">
+            </div>
+            <div class="form-group">
+              <label for="shift-break-end">Break To</label>
+              <input type="time" id="shift-break-end" placeholder="Optional">
+            </div>
+          </div>
+          <div class="form-actions">
+            <button id="btn-save-shift" class="btn btn-success" onclick="saveShift()">Add Shift</button>
+            <button id="btn-cancel-edit" class="btn btn-ghost hidden" onclick="cancelEditShift()">Cancel</button>
+          </div>
+        </div>
+
+        <!-- Shifts Table -->
+        <div class="table-container">
+          <table id="shifts-table">
+            <thead>
+              <tr>
+                <th>Date &amp; Day</th>
+                <th>Working Hours</th>
+                <th>Break</th>
+                <th>Total Hours</th>
+                <th>Earnings (DKK)</th>
+                <th id="col-actions" class="col-actions hidden">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="shifts-body">
+            </tbody>
+            <tfoot>
+              <tr class="total-row">
+                <td colspan="3"><strong>Total</strong></td>
+                <td id="total-hours"><strong>0</strong></td>
+                <td id="total-earnings"><strong>0.00 DKK</strong></td>
+                <td id="col-actions-foot" class="col-actions hidden"></td>
+              </tr>
+            </tfoot>
+          </table>
+          <p id="no-shifts-msg" class="empty-state">No shifts entered yet. Add your first shift above.</p>
+        </div>
+
+        <!-- Close Month Button -->
+        <div id="close-month-container" class="close-month-container hidden">
+          <button class="btn btn-danger" onclick="closeMonth()">Close Month</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Breakdown Modal -->
+  <div id="breakdown-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Earnings Breakdown</h3>
+        <button class="btn-icon" onclick="closeBreakdownModal()" title="Close">&times;</button>
+      </div>
+      <div id="breakdown-content" class="modal-body"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

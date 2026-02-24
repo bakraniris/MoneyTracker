@@ -1,0 +1,11 @@
+# Ignore packages installed by npm/node in any dir
+node_modules
+
+# Ignore env (contains DB credentials)
+.env
+
+# Ignore old SQLite DB (now using Supabase)
+database.db
+
+# Ignore hidden macOS files
+.DS_Store
