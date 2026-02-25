@@ -13,12 +13,38 @@
       <p class="subtitle">Track your shifts &amp; earnings</p>
     </header>
 
+    <!-- View: Auth -->
+    <section id="view-auth" class="view active">
+      <div class="card auth-card">
+        <h2 id="auth-title">Log In</h2>
+        <div class="auth-form">
+          <div class="form-group">
+            <label for="auth-email">Email</label>
+            <input type="email" id="auth-email" placeholder="you@example.com">
+          </div>
+          <div class="form-group">
+            <label for="auth-password">Password</label>
+            <input type="password" id="auth-password" placeholder="Password (min 6 chars)">
+          </div>
+          <div id="auth-error" class="auth-error hidden"></div>
+          <button id="btn-auth-submit" class="btn btn-primary btn-full" onclick="handleAuth()">Log In</button>
+          <p class="auth-toggle">
+            <span id="auth-toggle-text">Don't have an account?</span>
+            <a href="#" id="auth-toggle-link" onclick="toggleAuthMode(event)">Sign Up</a>
+          </p>
+        </div>
+      </div>
+    </section>
+
     <!-- View: Months List -->
-    <section id="view-months" class="view active">
+    <section id="view-months" class="view">
       <div class="card">
         <div class="card-header">
           <h2>Your Months</h2>
-          <button class="btn btn-primary" onclick="showNewMonthForm()">+ New Month</button>
+          <div class="header-actions">
+            <button class="btn btn-primary" onclick="showNewMonthForm()">+ New Month</button>
+            <button class="btn btn-ghost btn-sm" onclick="handleLogout()">Log Out</button>
+          </div>
         </div>
 
         <div id="new-month-form" class="new-month-form hidden">
@@ -59,7 +85,6 @@
           </div>
         </div>
 
-        <!-- Shift Entry Form -->
         <div id="shift-form-container" class="shift-form hidden">
           <h3 id="shift-form-title">Add New Shift</h3>
           <div class="form-grid">
@@ -90,7 +115,6 @@
           </div>
         </div>
 
-        <!-- Shifts Table -->
         <div class="table-container">
           <table id="shifts-table">
             <thead>
@@ -103,8 +127,7 @@
                 <th id="col-actions" class="col-actions hidden">Actions</th>
               </tr>
             </thead>
-            <tbody id="shifts-body">
-            </tbody>
+            <tbody id="shifts-body"></tbody>
             <tfoot>
               <tr class="total-row">
                 <td colspan="3"><strong>Total</strong></td>
@@ -117,7 +140,6 @@
           <p id="no-shifts-msg" class="empty-state">No shifts entered yet. Add your first shift above.</p>
         </div>
 
-        <!-- Close Month Button -->
         <div id="close-month-container" class="close-month-container hidden">
           <button class="btn btn-danger" onclick="closeMonth()">Close Month</button>
         </div>
@@ -138,6 +160,7 @@
 
   <div id="toast" class="toast hidden"></div>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

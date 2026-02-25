@@ -64,6 +64,59 @@ header h1:hover {
   margin-top: 2px;
 }
 
+/* Auth */
+.auth-card {
+  max-width: 400px;
+  margin: 40px auto;
+}
+
+.auth-card h2 {
+  text-align: center;
+  margin-bottom: 20px;
+  font-size: 1.3rem;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.auth-form .form-group input {
+  width: 100%;
+}
+
+.btn-full {
+  width: 100%;
+  padding: 11px;
+  font-size: 1rem;
+}
+
+.auth-error {
+  padding: 10px 14px;
+  background: #fef2f2;
+  color: var(--danger);
+  border-radius: var(--radius-sm);
+  font-size: 0.88rem;
+  text-align: center;
+}
+
+.auth-toggle {
+  text-align: center;
+  font-size: 0.88rem;
+  color: var(--text-light);
+}
+
+.auth-toggle a {
+  color: var(--primary);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.auth-toggle a:hover {
+  text-decoration: underline;
+}
+
 /* Cards */
 .card {
   background: var(--card-bg);

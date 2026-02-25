@@ -5,29 +5,129 @@ const MONTH_NAMES = [
 
 let currentMonthData = null;
 let editingShiftId = null;
+let supabase = null;
+let authMode = 'login'; // 'login' or 'signup'
+
+// --- Supabase Auth Init ---
+
+async function initSupabase() {
+  const config = await fetch('/api/config').then(r => r.json());
+  supabase = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey);
+
+  const { data: { session } } = await supabase.auth.getSession();
+  if (session) {
+    showMonthsList();
+  } else {
+    showView('view-auth');
+  }
+
+  supabase.auth.onAuthStateChange((event, session) => {
+    if (event === 'SIGNED_OUT') {
+      showView('view-auth');
+    }
+  });
+}
+
+async function getToken() {
+  const { data: { session } } = await supabase.auth.getSession();
+  return session?.access_token || null;
+}
 
 // --- API Helpers ---
 
 async function api(url, options = {}) {
+  const token = await getToken();
+  if (!token) {
+    showView('view-auth');
+    throw new Error('Not authenticated');
+  }
   let res;
   try {
     res = await fetch(url, {
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
       ...options
     });
   } catch (networkErr) {
     console.error('Network error:', networkErr);
     throw new Error('Could not connect to server. Is it running?');
   }
+  if (res.status === 401) {
+    showView('view-auth');
+    throw new Error('Session expired. Please log in again.');
+  }
   let data;
   try {
     data = await res.json();
   } catch (parseErr) {
-    console.error('JSON parse error:', parseErr);
     throw new Error(`Server error (${res.status})`);
   }
   if (!res.ok) throw new Error(data.error || 'Request failed');
   return data;
+}
+
+// --- Auth ---
+
+function toggleAuthMode(e) {
+  e.preventDefault();
+  authMode = authMode === 'login' ? 'signup' : 'login';
+  document.getElementById('auth-title').textContent = authMode === 'login' ? 'Log In' : 'Sign Up';
+  document.getElementById('btn-auth-submit').textContent = authMode === 'login' ? 'Log In' : 'Sign Up';
+  document.getElementById('auth-toggle-text').textContent =
+    authMode === 'login' ? "Don't have an account?" : 'Already have an account?';
+  document.getElementById('auth-toggle-link').textContent =
+    authMode === 'login' ? 'Sign Up' : 'Log In';
+  document.getElementById('auth-error').classList.add('hidden');
+}
+
+async function handleAuth() {
+  const email = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value;
+  const errorEl = document.getElementById('auth-error');
+
+  if (!email || !password) {
+    errorEl.textContent = 'Please enter email and password';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+
+  errorEl.classList.add('hidden');
+  document.getElementById('btn-auth-submit').disabled = true;
+
+  try {
+    let result;
+    if (authMode === 'signup') {
+      result = await supabase.auth.signUp({ email, password });
+    } else {
+      result = await supabase.auth.signInWithPassword({ email, password });
+    }
+
+    if (result.error) throw result.error;
+
+    if (authMode === 'signup' && !result.data.session) {
+      errorEl.textContent = 'Check your email for a confirmation link.';
+      errorEl.classList.remove('hidden');
+      errorEl.style.color = 'var(--success)';
+      return;
+    }
+
+    showMonthsList();
+  } catch (err) {
+    errorEl.textContent = err.message;
+    errorEl.classList.remove('hidden');
+    errorEl.style.color = '';
+  } finally {
+    document.getElementById('btn-auth-submit').disabled = false;
+  }
+}
+
+async function handleLogout() {
+  await supabase.auth.signOut();
+  currentMonthData = null;
+  editingShiftId = null;
+  showView('view-auth');
 }
 
 // --- Toast ---
@@ -61,7 +161,7 @@ async function loadMonths() {
     const months = await api('/api/months');
     renderMonthsList(months);
   } catch (e) {
-    showToast('Failed to load months', true);
+    if (e.message !== 'Not authenticated') showToast('Failed to load months', true);
   }
 }
 
@@ -244,8 +344,8 @@ function renderShiftsTable() {
           ${displayDate}
           <span class="day-label">${s.day_name}</span>
         </td>
-        <td>${s.start_time} – ${s.end_time}</td>
-        <td>${s.break_start && s.break_end ? s.break_start + ' – ' + s.break_end : 'None'}</td>
+        <td>${s.start_time} \u2013 ${s.end_time}</td>
+        <td>${s.break_start && s.break_end ? s.break_start + ' \u2013 ' + s.break_end : 'None'}</td>
         <td>${s.total_hours.toFixed(2)}</td>
         <td class="earnings-cell">${s.daily_earnings.toFixed(2)}</td>
         <td class="col-actions">
@@ -272,7 +372,6 @@ function resetShiftForm() {
   document.getElementById('shift-end').value = '';
   document.getElementById('shift-break-start').value = '';
   document.getElementById('shift-break-end').value = '';
-
   setDefaultDate();
 }
 
@@ -399,7 +498,7 @@ function renderBreakdownModal(shift, breakdown) {
       return `
         <tr class="breakdown-break-row">
           <td>${seg.dayName}</td>
-          <td>${seg.from} – ${seg.to}</td>
+          <td>${seg.from} \u2013 ${seg.to}</td>
           <td colspan="4" class="breakdown-break-label">BREAK (${seg.minutes} min)</td>
         </tr>
       `;
@@ -416,7 +515,7 @@ function renderBreakdownModal(shift, breakdown) {
     return `
       <tr>
         <td>${seg.dayName}</td>
-        <td>${seg.from} – ${seg.to}</td>
+        <td>${seg.from} \u2013 ${seg.to}</td>
         <td>
           ${seg.baseRate.toFixed(2)} ${supplementHtml}
           ${supplementNameHtml}
@@ -434,8 +533,8 @@ function renderBreakdownModal(shift, breakdown) {
   content.innerHTML = `
     <div class="breakdown-header-info">
       <div><strong>Date:</strong> ${displayDate} (${shift.day_name})</div>
-      <div><strong>Shift:</strong> ${shift.start_time} – ${shift.end_time}</div>
-      ${hasBreak ? `<div><strong>Break:</strong> ${shift.break_start} – ${shift.break_end} (${shift.break_minutes} min)</div>` : '<div><strong>Break:</strong> None</div>'}
+      <div><strong>Shift:</strong> ${shift.start_time} \u2013 ${shift.end_time}</div>
+      ${hasBreak ? `<div><strong>Break:</strong> ${shift.break_start} \u2013 ${shift.break_end} (${shift.break_minutes} min)</div>` : '<div><strong>Break:</strong> None</div>'}
     </div>
 
     <table class="breakdown-table">
@@ -449,9 +548,7 @@ function renderBreakdownModal(shift, breakdown) {
           <th>Earnings</th>
         </tr>
       </thead>
-      <tbody>
-        ${segmentsHtml}
-      </tbody>
+      <tbody>${segmentsHtml}</tbody>
     </table>
 
     <div class="breakdown-total">
@@ -476,9 +573,13 @@ function closeBreakdownModal() {
 // --- Init ---
 
 document.addEventListener('DOMContentLoaded', () => {
-  loadMonths();
+  initSupabase();
 
   document.getElementById('breakdown-modal').addEventListener('click', (e) => {
     if (e.target.id === 'breakdown-modal') closeBreakdownModal();
+  });
+
+  document.getElementById('auth-password').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') handleAuth();
   });
 });

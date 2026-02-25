@@ -1,49 +1,36 @@
-# Supabase Migration Guide
+# Setup & Migration Guide
 
-## What’s done
+## .env keys needed
 
-- SQLite has been replaced with PostgreSQL (Supabase).
-- The server uses `pg` and `dotenv` instead of `better-sqlite3`.
-- Tables are created automatically on startup.
-
-## What you need to do
-
-### 1. `.env` location
-
-The server loads `.env` from `.cursorignore/.env` first, then falls back to the project root. Your current setup should work as-is.
-
-### 2. Set the connection string
-
-In `.env`:
+Add these to `.env` (or `.cursorignore/.env`):
 
 ```
-DB_CONNECTION_STRING=postgresql://postgres.[project-ref]:[YOUR-PASSWORD]@aws-0-[region].pooler.supabase.com:6543/postgres
+DB_CONNECTION_STRING=postgresql://...your-supabase-connection-string...
+SUPABASE_URL=https://xxxxx.supabase.co
+SUPABASE_ANON_KEY=eyJhbG...your-anon-key...
 ```
 
-To get it in Supabase:
+Where to find them in Supabase Dashboard:
 
-1. Open your project → **Settings** → **Database**
-2. Under **Connection string**, choose **URI**
-3. Copy the string and replace `[YOUR-PASSWORD]` with your database password
+| Key | Location |
+|-----|----------|
+| `DB_CONNECTION_STRING` | Settings > Database > Connection string > URI |
+| `SUPABASE_URL` | Settings > API > Project URL |
+| `SUPABASE_ANON_KEY` | Settings > API > anon / public key |
 
-Use either:
-
-- **Session pooler** (port 6543) – recommended for this app
-- **Direct connection** (port 5432) – if the pooler gives issues
-
-### 3. Install dependencies and start
+## Start the app
 
 ```bash
-cd /Users/iris/Desktop/MoneyTracker
 npm install
 npm start
 ```
 
-### 4. Optional: migrate existing data
+## Migrate old SQLite data
 
-If you have data in the old SQLite database and want it in Supabase:
+1. Start the app and **sign up** with your email
+2. Go to Supabase Dashboard > **Authentication** > **Users**
+3. Copy your **User UID**
+4. Add to `.env`: `MIGRATION_USER_ID=your-uid-here`
+5. Run: `npm run migrate`
 
-1. Export from SQLite (e.g. with a small script or DB tool).
-2. Insert the rows into the Supabase `months` and `shifts` tables.
-
-If you don’t need the old data, you can ignore this step.
+This assigns all your old data to your account.

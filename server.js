@@ -15,16 +15,16 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
 });
 
-// Create tables on startup
 async function initDb() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS months (
       id SERIAL PRIMARY KEY,
+      user_id TEXT NOT NULL,
       month INTEGER NOT NULL,
       year INTEGER NOT NULL,
       is_closed INTEGER DEFAULT 0,
       created_at TIMESTAMPTZ DEFAULT NOW(),
-      UNIQUE(month, year)
+      UNIQUE(user_id, month, year)
     );
 
     CREATE TABLE IF NOT EXISTS shifts (
@@ -43,6 +43,45 @@ async function initDb() {
     );
   `);
 }
+
+// --- Auth Middleware ---
+
+const fetch = require("node-fetch");
+
+async function authMiddleware(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Not authenticated" });
+  }
+
+  const token = authHeader.split(" ")[1];
+  try {
+    const resp = await fetch(`${process.env.SUPABASE_URL}/auth/v1/user`, {
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "apikey": process.env.SUPABASE_ANON_KEY,
+      },
+    });
+    if (!resp.ok) return res.status(401).json({ error: "Invalid or expired token" });
+    const user = await resp.json();
+    req.userId = user.id;
+    next();
+  } catch (e) {
+    return res.status(401).json({ error: "Auth verification failed" });
+  }
+}
+
+// Serve Supabase config to frontend (anon key is public by design)
+app.get("/api/config", (req, res) => {
+  res.json({
+    supabaseUrl: process.env.SUPABASE_URL,
+    supabaseAnonKey: process.env.SUPABASE_ANON_KEY,
+  });
+});
+
+// All data routes require auth
+app.use("/api/months", authMiddleware);
+app.use("/api/shifts", authMiddleware);
 
 // --- Pay Calculation ---
 
@@ -65,7 +104,6 @@ function calculateEarnings(dateStr, startTime, endTime, breakStart, breakEnd) {
 
   const shiftStart = new Date(year, month - 1, day, startH, startM);
   let shiftEnd = new Date(year, month - 1, day, endH, endM);
-
   if (shiftEnd <= shiftStart) shiftEnd.setDate(shiftEnd.getDate() + 1);
 
   let breakStartDate = null;
@@ -94,10 +132,8 @@ function calculateEarnings(dateStr, startTime, endTime, breakStart, breakEnd) {
 
   for (let i = 0; i < totalShiftMinutes; i++) {
     const isOnBreak =
-      breakStartDate &&
-      breakEndDate &&
-      cursor >= breakStartDate &&
-      cursor < breakEndDate;
+      breakStartDate && breakEndDate &&
+      cursor >= breakStartDate && cursor < breakEndDate;
 
     if (!isOnBreak) {
       const dow = cursor.getDay();
@@ -117,11 +153,10 @@ function calculateEarnings(dateStr, startTime, endTime, breakStart, breakEnd) {
 }
 
 function getSupplementLabel(dayOfWeek, hour) {
-  if (hour >= 0 && hour < 6) return "Night supplement (00:00–06:00)";
-  if (dayOfWeek === 0) return "Sunday supplement (06:00–00:00)";
-  if (dayOfWeek === 6 && hour >= 14) return "Saturday supplement (14:00–00:00)";
-  if (dayOfWeek >= 1 && dayOfWeek <= 5 && hour >= 18)
-    return "Evening supplement (18:00–00:00)";
+  if (hour >= 0 && hour < 6) return "Night supplement (00:00\u201306:00)";
+  if (dayOfWeek === 0) return "Sunday supplement (06:00\u201300:00)";
+  if (dayOfWeek === 6 && hour >= 14) return "Saturday supplement (14:00\u201300:00)";
+  if (dayOfWeek >= 1 && dayOfWeek <= 5 && hour >= 18) return "Evening supplement (18:00\u201300:00)";
   return null;
 }
 
@@ -188,10 +223,8 @@ function calculateBreakdown(dateStr, startTime, endTime, breakStart, breakEnd) {
     if (minutes <= 0) continue;
 
     const isBreak =
-      breakStartDate &&
-      breakEndDate &&
-      segStart >= breakStartDate &&
-      segEnd <= breakEndDate;
+      breakStartDate && breakEndDate &&
+      segStart >= breakStartDate && segEnd <= breakEndDate;
 
     const dow = segStart.getDay();
     const h = segStart.getHours();
@@ -210,15 +243,9 @@ function calculateBreakdown(dateStr, startTime, endTime, breakStart, breakEnd) {
     segments.push({
       from: segStart.toTimeString().slice(0, 5),
       to: segEnd.toTimeString().slice(0, 5),
-      dayName,
-      minutes,
+      dayName, minutes,
       hours: Math.round(hours * 100) / 100,
-      isBreak,
-      baseRate: BASE_RATE,
-      supplement,
-      supplementLabel,
-      rate,
-      earnings,
+      isBreak, baseRate: BASE_RATE, supplement, supplementLabel, rate, earnings,
     });
   }
 
@@ -231,8 +258,7 @@ function calculateBreakdown(dateStr, startTime, endTime, breakStart, breakEnd) {
 
 function getDayName(dateStr) {
   const [year, month, day] = dateStr.split("-").map(Number);
-  const date = new Date(year, month - 1, day);
-  return DAY_NAMES[date.getDay()];
+  return DAY_NAMES[new Date(year, month - 1, day).getDay()];
 }
 
 // --- API Routes ---
@@ -240,7 +266,8 @@ function getDayName(dateStr) {
 app.get("/api/months", async (req, res) => {
   try {
     const { rows } = await pool.query(
-      "SELECT * FROM months ORDER BY year DESC, month DESC"
+      "SELECT * FROM months WHERE user_id = $1 ORDER BY year DESC, month DESC",
+      [req.userId]
     );
     res.json(rows);
   } catch (e) {
@@ -255,8 +282,8 @@ app.post("/api/months", async (req, res) => {
   }
   try {
     const { rows } = await pool.query(
-      "INSERT INTO months (month, year) VALUES ($1, $2) RETURNING *",
-      [month, year]
+      "INSERT INTO months (user_id, month, year) VALUES ($1, $2, $3) RETURNING *",
+      [req.userId, month, year]
     );
     res.json(rows[0]);
   } catch (e) {
@@ -270,8 +297,8 @@ app.post("/api/months", async (req, res) => {
 app.get("/api/months/:id", async (req, res) => {
   try {
     const { rows: monthRows } = await pool.query(
-      "SELECT * FROM months WHERE id = $1",
-      [req.params.id]
+      "SELECT * FROM months WHERE id = $1 AND user_id = $2",
+      [req.params.id, req.userId]
     );
     const month = monthRows[0];
     if (!month) return res.status(404).json({ error: "Month not found" });
@@ -288,7 +315,11 @@ app.get("/api/months/:id", async (req, res) => {
 
 app.patch("/api/months/:id/close", async (req, res) => {
   try {
-    await pool.query("UPDATE months SET is_closed = 1 WHERE id = $1", [req.params.id]);
+    const { rowCount } = await pool.query(
+      "UPDATE months SET is_closed = 1 WHERE id = $1 AND user_id = $2",
+      [req.params.id, req.userId]
+    );
+    if (rowCount === 0) return res.status(404).json({ error: "Month not found" });
     const { rows } = await pool.query("SELECT * FROM months WHERE id = $1", [req.params.id]);
     res.json(rows[0]);
   } catch (e) {
@@ -298,7 +329,11 @@ app.patch("/api/months/:id/close", async (req, res) => {
 
 app.patch("/api/months/:id/reopen", async (req, res) => {
   try {
-    await pool.query("UPDATE months SET is_closed = 0 WHERE id = $1", [req.params.id]);
+    const { rowCount } = await pool.query(
+      "UPDATE months SET is_closed = 0 WHERE id = $1 AND user_id = $2",
+      [req.params.id, req.userId]
+    );
+    if (rowCount === 0) return res.status(404).json({ error: "Month not found" });
     const { rows } = await pool.query("SELECT * FROM months WHERE id = $1", [req.params.id]);
     res.json(rows[0]);
   } catch (e) {
@@ -311,7 +346,10 @@ app.post("/api/months/:id/shifts", async (req, res) => {
   const monthId = req.params.id;
 
   try {
-    const { rows: monthRows } = await pool.query("SELECT * FROM months WHERE id = $1", [monthId]);
+    const { rows: monthRows } = await pool.query(
+      "SELECT * FROM months WHERE id = $1 AND user_id = $2",
+      [monthId, req.userId]
+    );
     if (!monthRows[0]) return res.status(404).json({ error: "Month not found" });
 
     const dayName = getDayName(date);
@@ -332,9 +370,15 @@ app.post("/api/months/:id/shifts", async (req, res) => {
 
 app.put("/api/shifts/:id", async (req, res) => {
   const { date, start_time, end_time, break_start, break_end } = req.body;
-  const shiftId = req.params.id;
-
   try {
+    // Verify the shift belongs to a month owned by this user
+    const { rows: check } = await pool.query(
+      `SELECT s.id FROM shifts s JOIN months m ON s.month_id = m.id
+       WHERE s.id = $1 AND m.user_id = $2`,
+      [req.params.id, req.userId]
+    );
+    if (!check[0]) return res.status(404).json({ error: "Shift not found" });
+
     const dayName = getDayName(date);
     const { totalHours, earnings, breakMinutes } = calculateEarnings(
       date, start_time, end_time, break_start || null, break_end || null
@@ -343,11 +387,10 @@ app.put("/api/shifts/:id", async (req, res) => {
     await pool.query(
       `UPDATE shifts SET date = $1, start_time = $2, end_time = $3, break_start = $4, break_end = $5,
        break_minutes = $6, day_name = $7, total_hours = $8, daily_earnings = $9 WHERE id = $10`,
-      [date, start_time, end_time, break_start || null, break_end || null, breakMinutes, dayName, totalHours, earnings, shiftId]
+      [date, start_time, end_time, break_start || null, break_end || null, breakMinutes, dayName, totalHours, earnings, req.params.id]
     );
 
-    const { rows } = await pool.query("SELECT * FROM shifts WHERE id = $1", [shiftId]);
-    if (!rows[0]) return res.status(404).json({ error: "Shift not found" });
+    const { rows } = await pool.query("SELECT * FROM shifts WHERE id = $1", [req.params.id]);
     res.json(rows[0]);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -356,8 +399,12 @@ app.put("/api/shifts/:id", async (req, res) => {
 
 app.get("/api/shifts/:id/breakdown", async (req, res) => {
   try {
-    const { rows } = await pool.query("SELECT * FROM shifts WHERE id = $1", [req.params.id]);
-    const shift = rows[0];
+    const { rows: check } = await pool.query(
+      `SELECT s.* FROM shifts s JOIN months m ON s.month_id = m.id
+       WHERE s.id = $1 AND m.user_id = $2`,
+      [req.params.id, req.userId]
+    );
+    const shift = check[0];
     if (!shift) return res.status(404).json({ error: "Shift not found" });
 
     const breakdown = calculateBreakdown(
@@ -371,8 +418,12 @@ app.get("/api/shifts/:id/breakdown", async (req, res) => {
 
 app.delete("/api/shifts/:id", async (req, res) => {
   try {
-    const { rows } = await pool.query("SELECT * FROM shifts WHERE id = $1", [req.params.id]);
-    if (!rows[0]) return res.status(404).json({ error: "Shift not found" });
+    const { rows: check } = await pool.query(
+      `SELECT s.id FROM shifts s JOIN months m ON s.month_id = m.id
+       WHERE s.id = $1 AND m.user_id = $2`,
+      [req.params.id, req.userId]
+    );
+    if (!check[0]) return res.status(404).json({ error: "Shift not found" });
     await pool.query("DELETE FROM shifts WHERE id = $1", [req.params.id]);
     res.json({ success: true });
   } catch (e) {
@@ -382,7 +433,10 @@ app.delete("/api/shifts/:id", async (req, res) => {
 
 app.delete("/api/months/:id", async (req, res) => {
   try {
-    const { rows } = await pool.query("SELECT * FROM months WHERE id = $1", [req.params.id]);
+    const { rows } = await pool.query(
+      "SELECT * FROM months WHERE id = $1 AND user_id = $2",
+      [req.params.id, req.userId]
+    );
     if (!rows[0]) return res.status(404).json({ error: "Month not found" });
     await pool.query("DELETE FROM shifts WHERE month_id = $1", [req.params.id]);
     await pool.query("DELETE FROM months WHERE id = $1", [req.params.id]);
@@ -393,9 +447,12 @@ app.delete("/api/months/:id", async (req, res) => {
 });
 
 async function start() {
-  if (!process.env.DB_CONNECTION_STRING) {
-    console.error("Missing DB_CONNECTION_STRING in .env");
-    process.exit(1);
+  const required = ["DB_CONNECTION_STRING", "SUPABASE_URL", "SUPABASE_ANON_KEY"];
+  for (const key of required) {
+    if (!process.env[key]) {
+      console.error(`Missing ${key} in .env`);
+      process.exit(1);
+    }
   }
   await initDb();
   app.listen(PORT, () => {
