@@ -5,23 +5,49 @@ const MONTH_NAMES = [
 
 let currentMonthData = null;
 let editingShiftId = null;
-let supabase = null;
+let supabaseClient = null;
 let authMode = 'login'; // 'login' or 'signup'
 
 // --- Supabase Auth Init ---
 
 async function initSupabase() {
-  const config = await fetch('/api/config').then(r => r.json());
-  supabase = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey);
+  const debugEl = document.getElementById('auth-error');
+  function initDebug(msg) {
+    console.log('[initSupabase]', msg);
+    if (debugEl) { debugEl.textContent = msg; debugEl.classList.remove('hidden'); debugEl.style.color = '#e67e22'; }
+  }
+  try {
+    initDebug('Fetching config...');
+    const res = await fetch('/api/config');
+    const config = await res.json();
+    initDebug('Config received: ' + (config.supabaseUrl ? 'URL ok' : 'URL missing') + ', ' + (config.supabaseAnonKey ? 'Key ok' : 'Key missing'));
+    if (!config.supabaseUrl || !config.supabaseAnonKey) {
+      throw new Error('Server missing Supabase config. Check SUPABASE_URL and SUPABASE_ANON_KEY in .env');
+    }
+    const createClient = (window.supabase?.createClient) || (window.supabase && typeof window.supabase === 'object' && window.supabase.createClient);
+    if (!createClient) throw new Error('Supabase script not loaded. Check browser console for errors.');
+    supabaseClient = createClient(config.supabaseUrl, config.supabaseAnonKey);
+    initDebug('Supabase client ready. You can log in now.');
+    setTimeout(() => { if (debugEl) debugEl.classList.add('hidden'); }, 2000);
+  } catch (e) {
+    document.getElementById('view-auth').innerHTML = `
+      <div class="card auth-card">
+        <h2>Config Error</h2>
+        <p class="auth-error">${e.message}</p>
+      </div>
+    `;
+    showView('view-auth');
+    return;
+  }
 
-  const { data: { session } } = await supabase.auth.getSession();
+  const { data: { session } } = await supabaseClient.auth.getSession();
   if (session) {
     showMonthsList();
   } else {
     showView('view-auth');
   }
 
-  supabase.auth.onAuthStateChange((event, session) => {
+  supabaseClient.auth.onAuthStateChange((event, session) => {
     if (event === 'SIGNED_OUT') {
       showView('view-auth');
     }
@@ -29,7 +55,7 @@ async function initSupabase() {
 }
 
 async function getToken() {
-  const { data: { session } } = await supabase.auth.getSession();
+  const { data: { session } } = await supabaseClient.auth.getSession();
   return session?.access_token || null;
 }
 
@@ -82,26 +108,44 @@ function toggleAuthMode(e) {
   document.getElementById('auth-error').classList.add('hidden');
 }
 
-async function handleAuth() {
-  const email = document.getElementById('auth-email').value.trim();
-  const password = document.getElementById('auth-password').value;
+async function handleAuth(e) {
+  if (e) e.preventDefault();
+  const btn = document.getElementById('btn-auth-submit');
   const errorEl = document.getElementById('auth-error');
 
-  if (!email || !password) {
-    errorEl.textContent = 'Please enter email and password';
+  function showDebug(msg) {
+    errorEl.textContent = msg;
     errorEl.classList.remove('hidden');
+    errorEl.style.color = '#e67e22';
+    console.log('[handleAuth]', msg);
+  }
+
+  showDebug('Handler called...');
+
+  if (!supabaseClient) {
+    showDebug('supabase client is null - app not ready');
     return;
   }
 
-  errorEl.classList.add('hidden');
-  document.getElementById('btn-auth-submit').disabled = true;
+  const email = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value;
+
+  if (!email || !password) {
+    showDebug('Missing email or password');
+    return;
+  }
+
+  showDebug(`Attempting ${authMode} for ${email}...`);
+  const originalText = btn.textContent;
+  btn.textContent = authMode === 'signup' ? 'Signing up...' : 'Logging in...';
+  btn.disabled = true;
 
   try {
     let result;
     if (authMode === 'signup') {
-      result = await supabase.auth.signUp({ email, password });
+      result = await supabaseClient.auth.signUp({ email, password });
     } else {
-      result = await supabase.auth.signInWithPassword({ email, password });
+      result = await supabaseClient.auth.signInWithPassword({ email, password });
     }
 
     if (result.error) throw result.error;
@@ -113,18 +157,24 @@ async function handleAuth() {
       return;
     }
 
+    showDebug('Success! Loading months...');
     showMonthsList();
   } catch (err) {
-    errorEl.textContent = err.message;
+    let msg = err?.message || String(err);
+    if (msg && msg.toLowerCase().includes('email not confirmed')) {
+      msg += ' Check your inbox for the confirmation link, or disable "Confirm email" in Supabase Dashboard > Authentication > Providers > Email.';
+    }
+    errorEl.textContent = msg;
     errorEl.classList.remove('hidden');
     errorEl.style.color = '';
   } finally {
-    document.getElementById('btn-auth-submit').disabled = false;
+    btn.disabled = false;
+    btn.textContent = originalText;
   }
 }
 
 async function handleLogout() {
-  await supabase.auth.signOut();
+  await supabaseClient.auth.signOut();
   currentMonthData = null;
   editingShiftId = null;
   showView('view-auth');
@@ -573,13 +623,9 @@ function closeBreakdownModal() {
 // --- Init ---
 
 document.addEventListener('DOMContentLoaded', () => {
-  initSupabase();
-
-  document.getElementById('breakdown-modal').addEventListener('click', (e) => {
+  document.getElementById('breakdown-modal')?.addEventListener('click', (e) => {
     if (e.target.id === 'breakdown-modal') closeBreakdownModal();
   });
 
-  document.getElementById('auth-password').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') handleAuth();
-  });
+  initSupabase();
 });

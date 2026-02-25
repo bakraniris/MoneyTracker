@@ -24,10 +24,10 @@
           </div>
           <div class="form-group">
             <label for="auth-password">Password</label>
-            <input type="password" id="auth-password" placeholder="Password (min 6 chars)">
+            <input type="password" id="auth-password" placeholder="Password (min 6 chars)" onkeydown="if(event.key==='Enter'){event.preventDefault();handleAuth();}">
           </div>
           <div id="auth-error" class="auth-error hidden"></div>
-          <button id="btn-auth-submit" class="btn btn-primary btn-full" onclick="handleAuth()">Log In</button>
+          <button type="button" id="btn-auth-submit" class="btn btn-primary btn-full" onclick="try{handleAuth()}catch(err){document.getElementById('auth-error').textContent='JS Error: '+err.message;document.getElementById('auth-error').classList.remove('hidden');document.getElementById('auth-error').style.color='red';}">Log In</button>
           <p class="auth-toggle">
             <span id="auth-toggle-text">Don't have an account?</span>
             <a href="#" id="auth-toggle-link" onclick="toggleAuthMode(event)">Sign Up</a>
@@ -161,6 +161,20 @@
   <div id="toast" class="toast hidden"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-  <script src="app.js"></script>
+  <script src="app.js?v=4"></script>
+  <script>
+    window.addEventListener('load', function() {
+      var errEl = document.getElementById('auth-error');
+      if (typeof handleAuth !== 'function') {
+        errEl.textContent = 'ERROR: app.js failed to load. Check browser console (F12).';
+        errEl.classList.remove('hidden');
+        errEl.style.color = 'red';
+      } else if (!window.supabase) {
+        errEl.textContent = 'Supabase CDN script failed to load.';
+        errEl.classList.remove('hidden');
+        errEl.style.color = 'red';
+      }
+    });
+  </script>
 </body>
 </html>
