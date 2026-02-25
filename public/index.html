@@ -9,8 +9,17 @@
 <body>
   <div class="app">
     <header>
-      <h1 id="header-title" onclick="showMonthsList()">MoneyTracker</h1>
-      <p class="subtitle">Track your shifts &amp; earnings</p>
+      <div>
+        <h1 id="header-title" onclick="showMonthsList()">MoneyTracker</h1>
+        <p class="subtitle">Track your shifts &amp; earnings</p>
+      </div>
+      <div id="settings-container" class="settings-container hidden">
+        <button class="btn-settings" onclick="toggleSettingsMenu()" title="Settings">&#9881;</button>
+        <div id="settings-menu" class="settings-menu hidden">
+          <button class="settings-item" onclick="handleLogout()">Log Out</button>
+          <button class="settings-item settings-danger" onclick="handleDeleteAccount()">Delete Account</button>
+        </div>
+      </div>
     </header>
 
     <!-- View: Auth -->
@@ -18,16 +27,23 @@
       <div class="card auth-card">
         <h2 id="auth-title">Log In</h2>
         <div class="auth-form">
+          <div class="form-group hidden" id="auth-name-group">
+            <label for="auth-name">Name</label>
+            <input type="text" id="auth-name" placeholder="Your name">
+          </div>
           <div class="form-group">
             <label for="auth-email">Email</label>
             <input type="email" id="auth-email" placeholder="you@example.com">
           </div>
           <div class="form-group">
             <label for="auth-password">Password</label>
-            <input type="password" id="auth-password" placeholder="Password (min 6 chars)" onkeydown="if(event.key==='Enter'){event.preventDefault();handleAuth();}">
+            <div class="password-wrapper">
+              <input type="password" id="auth-password" placeholder="Password (min 6 chars)" onkeydown="if(event.key==='Enter'){event.preventDefault();handleAuth();}">
+              <button type="button" class="btn-toggle-pw" onclick="togglePassword()" id="btn-toggle-pw" title="Show password">&#128065;</button>
+            </div>
           </div>
           <div id="auth-error" class="auth-error hidden"></div>
-          <button type="button" id="btn-auth-submit" class="btn btn-primary btn-full" onclick="try{handleAuth()}catch(err){document.getElementById('auth-error').textContent='JS Error: '+err.message;document.getElementById('auth-error').classList.remove('hidden');document.getElementById('auth-error').style.color='red';}">Log In</button>
+          <button type="button" id="btn-auth-submit" class="btn btn-primary btn-full" onclick="handleAuth()">Log In</button>
           <p class="auth-toggle">
             <span id="auth-toggle-text">Don't have an account?</span>
             <a href="#" id="auth-toggle-link" onclick="toggleAuthMode(event)">Sign Up</a>
@@ -40,10 +56,12 @@
     <section id="view-months" class="view">
       <div class="card">
         <div class="card-header">
-          <h2>Your Months</h2>
+          <div>
+            <p id="welcome-name" class="welcome-msg"></p>
+            <h2>Your Months</h2>
+          </div>
           <div class="header-actions">
             <button class="btn btn-primary" onclick="showNewMonthForm()">+ New Month</button>
-            <button class="btn btn-ghost btn-sm" onclick="handleLogout()">Log Out</button>
           </div>
         </div>
 
@@ -161,20 +179,6 @@
   <div id="toast" class="toast hidden"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-  <script src="app.js?v=4"></script>
-  <script>
-    window.addEventListener('load', function() {
-      var errEl = document.getElementById('auth-error');
-      if (typeof handleAuth !== 'function') {
-        errEl.textContent = 'ERROR: app.js failed to load. Check browser console (F12).';
-        errEl.classList.remove('hidden');
-        errEl.style.color = 'red';
-      } else if (!window.supabase) {
-        errEl.textContent = 'Supabase CDN script failed to load.';
-        errEl.classList.remove('hidden');
-        errEl.style.color = 'red';
-      }
-    });
-  </script>
+  <script src="app.js?v=5"></script>
 </body>
 </html>

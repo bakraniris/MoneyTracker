@@ -11,24 +11,15 @@ let authMode = 'login'; // 'login' or 'signup'
 // --- Supabase Auth Init ---
 
 async function initSupabase() {
-  const debugEl = document.getElementById('auth-error');
-  function initDebug(msg) {
-    console.log('[initSupabase]', msg);
-    if (debugEl) { debugEl.textContent = msg; debugEl.classList.remove('hidden'); debugEl.style.color = '#e67e22'; }
-  }
   try {
-    initDebug('Fetching config...');
     const res = await fetch('/api/config');
     const config = await res.json();
-    initDebug('Config received: ' + (config.supabaseUrl ? 'URL ok' : 'URL missing') + ', ' + (config.supabaseAnonKey ? 'Key ok' : 'Key missing'));
     if (!config.supabaseUrl || !config.supabaseAnonKey) {
       throw new Error('Server missing Supabase config. Check SUPABASE_URL and SUPABASE_ANON_KEY in .env');
     }
     const createClient = (window.supabase?.createClient) || (window.supabase && typeof window.supabase === 'object' && window.supabase.createClient);
     if (!createClient) throw new Error('Supabase script not loaded. Check browser console for errors.');
     supabaseClient = createClient(config.supabaseUrl, config.supabaseAnonKey);
-    initDebug('Supabase client ready. You can log in now.');
-    setTimeout(() => { if (debugEl) debugEl.classList.add('hidden'); }, 2000);
   } catch (e) {
     document.getElementById('view-auth').innerHTML = `
       <div class="card auth-card">
@@ -96,6 +87,20 @@ async function api(url, options = {}) {
 
 // --- Auth ---
 
+function togglePassword() {
+  const input = document.getElementById('auth-password');
+  const btn = document.getElementById('btn-toggle-pw');
+  if (input.type === 'password') {
+    input.type = 'text';
+    btn.innerHTML = '&#128064;';
+    btn.title = 'Hide password';
+  } else {
+    input.type = 'password';
+    btn.innerHTML = '&#128065;';
+    btn.title = 'Show password';
+  }
+}
+
 function toggleAuthMode(e) {
   e.preventDefault();
   authMode = authMode === 'login' ? 'signup' : 'login';
@@ -106,6 +111,12 @@ function toggleAuthMode(e) {
   document.getElementById('auth-toggle-link').textContent =
     authMode === 'login' ? 'Sign Up' : 'Log In';
   document.getElementById('auth-error').classList.add('hidden');
+  const nameGroup = document.getElementById('auth-name-group');
+  if (authMode === 'signup') {
+    nameGroup.classList.remove('hidden');
+  } else {
+    nameGroup.classList.add('hidden');
+  }
 }
 
 async function handleAuth(e) {
@@ -113,29 +124,30 @@ async function handleAuth(e) {
   const btn = document.getElementById('btn-auth-submit');
   const errorEl = document.getElementById('auth-error');
 
-  function showDebug(msg) {
-    errorEl.textContent = msg;
-    errorEl.classList.remove('hidden');
-    errorEl.style.color = '#e67e22';
-    console.log('[handleAuth]', msg);
-  }
-
-  showDebug('Handler called...');
-
   if (!supabaseClient) {
-    showDebug('supabase client is null - app not ready');
+    errorEl.textContent = 'App not ready. Refresh the page.';
+    errorEl.classList.remove('hidden');
     return;
   }
 
   const email = document.getElementById('auth-email').value.trim();
   const password = document.getElementById('auth-password').value;
+  const name = document.getElementById('auth-name').value.trim();
 
   if (!email || !password) {
-    showDebug('Missing email or password');
+    errorEl.textContent = 'Please enter email and password.';
+    errorEl.classList.remove('hidden');
     return;
   }
 
-  showDebug(`Attempting ${authMode} for ${email}...`);
+  if (authMode === 'signup' && !name) {
+    errorEl.textContent = 'Please enter your name.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+
+  errorEl.classList.add('hidden');
+  errorEl.style.color = '';
   const originalText = btn.textContent;
   btn.textContent = authMode === 'signup' ? 'Signing up...' : 'Logging in...';
   btn.disabled = true;
@@ -143,7 +155,11 @@ async function handleAuth(e) {
   try {
     let result;
     if (authMode === 'signup') {
-      result = await supabaseClient.auth.signUp({ email, password });
+      result = await supabaseClient.auth.signUp({
+        email,
+        password,
+        options: { data: { display_name: name } }
+      });
     } else {
       result = await supabaseClient.auth.signInWithPassword({ email, password });
     }
@@ -157,7 +173,6 @@ async function handleAuth(e) {
       return;
     }
 
-    showDebug('Success! Loading months...');
     showMonthsList();
   } catch (err) {
     let msg = err?.message || String(err);
@@ -173,11 +188,37 @@ async function handleAuth(e) {
   }
 }
 
+function toggleSettingsMenu() {
+  document.getElementById('settings-menu').classList.toggle('hidden');
+}
+
 async function handleLogout() {
+  closeSettingsMenu();
   await supabaseClient.auth.signOut();
   currentMonthData = null;
   editingShiftId = null;
   showView('view-auth');
+}
+
+async function handleDeleteAccount() {
+  closeSettingsMenu();
+  if (!confirm('Are you sure you want to delete your account? All your data will be permanently lost.')) return;
+  if (!confirm('This cannot be undone. Type OK to confirm by clicking OK.')) return;
+
+  try {
+    await api('/api/account', { method: 'DELETE' });
+    await supabaseClient.auth.signOut();
+    currentMonthData = null;
+    editingShiftId = null;
+    showView('view-auth');
+    showToast('Account deleted');
+  } catch (e) {
+    showToast(e.message, true);
+  }
+}
+
+function closeSettingsMenu() {
+  document.getElementById('settings-menu').classList.add('hidden');
 }
 
 // --- Toast ---
@@ -195,13 +236,33 @@ function showToast(message, isError = false) {
 function showView(viewId) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById(viewId).classList.add('active');
+  const settingsEl = document.getElementById('settings-container');
+  if (viewId === 'view-auth') {
+    settingsEl.classList.add('hidden');
+  } else {
+    settingsEl.classList.remove('hidden');
+  }
+  closeSettingsMenu();
 }
 
 async function showMonthsList() {
   showView('view-months');
   currentMonthData = null;
   editingShiftId = null;
+  updateWelcomeName();
   await loadMonths();
+}
+
+async function updateWelcomeName() {
+  const el = document.getElementById('welcome-name');
+  if (!el || !supabaseClient) return;
+  try {
+    const { data: { user } } = await supabaseClient.auth.getUser();
+    const name = user?.user_metadata?.display_name || user?.email?.split('@')[0] || '';
+    el.textContent = name ? `Welcome, ${name}!` : '';
+  } catch (e) {
+    el.textContent = '';
+  }
 }
 
 // --- Months List ---
@@ -625,6 +686,13 @@ function closeBreakdownModal() {
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('breakdown-modal')?.addEventListener('click', (e) => {
     if (e.target.id === 'breakdown-modal') closeBreakdownModal();
+  });
+
+  document.addEventListener('click', (e) => {
+    const container = document.getElementById('settings-container');
+    if (container && !container.contains(e.target)) {
+      closeSettingsMenu();
+    }
   });
 
   initSupabase();

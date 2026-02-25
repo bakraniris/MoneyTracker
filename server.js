@@ -446,6 +446,21 @@ app.delete("/api/months/:id", async (req, res) => {
   }
 });
 
+// Delete user account and all their data
+app.delete("/api/account", authMiddleware, async (req, res) => {
+  try {
+    const months = await pool.query("SELECT id FROM months WHERE user_id = $1", [req.userId]);
+    const monthIds = months.rows.map(r => r.id);
+    if (monthIds.length > 0) {
+      await pool.query("DELETE FROM shifts WHERE month_id = ANY($1)", [monthIds]);
+    }
+    await pool.query("DELETE FROM months WHERE user_id = $1", [req.userId]);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 async function start() {
   const required = ["DB_CONNECTION_STRING", "SUPABASE_URL", "SUPABASE_ANON_KEY"];
   for (const key of required) {
