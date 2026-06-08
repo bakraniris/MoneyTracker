@@ -7,7 +7,7 @@ const { Pool } = require("pg");
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(express.json());
+app.use(express.json({ limit: "30mb" })); // raised for base64 avatar/cover/post attachments
 app.use(express.static(path.join(__dirname, "public")));
 
 const pool = new Pool({
@@ -41,6 +41,74 @@ async function initDb() {
       daily_earnings REAL NOT NULL,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS profiles (
+      user_id TEXT PRIMARY KEY,
+      full_name TEXT,
+      headline TEXT,
+      bio TEXT,
+      date_of_birth TEXT,
+      location TEXT,
+      occupation TEXT,
+      education TEXT,
+      website TEXT,
+      avatar_url TEXT,
+      cover_theme TEXT,
+      cover_image TEXT,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    ALTER TABLE profiles ADD COLUMN IF NOT EXISTS cover_theme TEXT;
+    ALTER TABLE profiles ADD COLUMN IF NOT EXISTS cover_image TEXT;
+
+    CREATE TABLE IF NOT EXISTS posts (
+      id SERIAL PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      content TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS post_attachments (
+      id SERIAL PRIMARY KEY,
+      post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,          -- 'image' | 'file'
+      name TEXT,
+      mime TEXT,
+      data TEXT NOT NULL,          -- data URL
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    ALTER TABLE posts ADD COLUMN IF NOT EXISTS wall_owner_id TEXT; -- profile this was posted on
+    ALTER TABLE posts ADD COLUMN IF NOT EXISTS mentions JSONB;      -- [{user_id, full_name}]
+
+    CREATE TABLE IF NOT EXISTS comments (
+      id SERIAL PRIMARY KEY,
+      post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS likes (
+      id SERIAL PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      target_type TEXT NOT NULL,   -- 'post' | 'comment'
+      target_id INTEGER NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, target_type, target_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS messages (
+      id SERIAL PRIMARY KEY,
+      sender_id TEXT NOT NULL,
+      recipient_id TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      read_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages (sender_id, recipient_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_messages_recipient_unread ON messages (recipient_id, read_at);
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachments JSONB;
   `);
 }
 
@@ -82,6 +150,13 @@ app.get("/api/config", (req, res) => {
 // All data routes require auth
 app.use("/api/months", authMiddleware);
 app.use("/api/shifts", authMiddleware);
+app.use("/api/profile", authMiddleware);
+app.use("/api/posts", authMiddleware);
+app.use("/api/comments", authMiddleware);
+app.use("/api/likes", authMiddleware);
+app.use("/api/users", authMiddleware);
+app.use("/api/conversations", authMiddleware);
+app.use("/api/messages", authMiddleware);
 
 // --- Pay Calculation ---
 
@@ -446,6 +521,382 @@ app.delete("/api/months/:id", async (req, res) => {
   }
 });
 
+// --- Profile ---
+
+const PROFILE_FIELDS = [
+  "full_name", "headline", "bio", "date_of_birth",
+  "location", "occupation", "education", "website", "avatar_url",
+  "cover_theme", "cover_image",
+];
+
+app.get("/api/profile", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT * FROM profiles WHERE user_id = $1",
+      [req.userId]
+    );
+    // Return an empty profile shell if none exists yet
+    if (!rows[0]) {
+      const empty = { user_id: req.userId };
+      PROFILE_FIELDS.forEach((f) => (empty[f] = null));
+      return res.json(empty);
+    }
+    res.json(rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.put("/api/profile", async (req, res) => {
+  // Only accept known fields; coerce empty strings to null
+  const values = PROFILE_FIELDS.map((f) => {
+    const v = req.body[f];
+    return v === undefined || v === "" ? null : v;
+  });
+
+  try {
+    const cols = PROFILE_FIELDS.join(", ");
+    const insertPlaceholders = PROFILE_FIELDS.map((_, i) => `$${i + 2}`).join(", ");
+    const updateSet = PROFILE_FIELDS.map((f) => `${f} = EXCLUDED.${f}`).join(", ");
+
+    const { rows } = await pool.query(
+      `INSERT INTO profiles (user_id, ${cols})
+       VALUES ($1, ${insertPlaceholders})
+       ON CONFLICT (user_id) DO UPDATE SET ${updateSet}, updated_at = NOW()
+       RETURNING *`,
+      [req.userId, ...values]
+    );
+    res.json(rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// View any user's profile + their timeline (own posts + posts on their wall).
+// Read-only: editing is only ever possible via PUT /api/profile (own account).
+app.get("/api/profile/:userId", async (req, res) => {
+  const targetId = req.params.userId;
+  try {
+    const { rows } = await pool.query("SELECT * FROM profiles WHERE user_id = $1", [targetId]);
+    let profile = rows[0];
+    if (!profile) {
+      profile = { user_id: targetId };
+      PROFILE_FIELDS.forEach((f) => (profile[f] = null));
+    }
+    const posts = await loadEnrichedPosts(
+      req.userId,
+      "(p.wall_owner_id = $2 OR (p.user_id = $2 AND p.wall_owner_id IS NULL))",
+      [targetId]
+    );
+    res.json({ profile, posts, isSelf: targetId === req.userId });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// --- Social feed: posts, comments, likes ---
+
+const MAX_ATTACHMENTS = 10;
+
+// Load enriched posts (author, wall owner, attachments, comments, likes) for a
+// given WHERE clause. $1 is always the viewer id; extra filter params start at $2.
+async function loadEnrichedPosts(viewerId, whereSql, extraParams = []) {
+  const { rows: posts } = await pool.query(
+    `SELECT p.id, p.user_id, p.wall_owner_id, p.content, p.mentions, p.created_at,
+            pr.full_name, pr.avatar_url, pr.cover_theme,
+            wo.full_name AS wall_owner_name,
+            (SELECT COUNT(*) FROM likes l WHERE l.target_type='post' AND l.target_id=p.id)::int AS like_count,
+            EXISTS(SELECT 1 FROM likes l WHERE l.target_type='post' AND l.target_id=p.id AND l.user_id=$1) AS liked
+     FROM posts p
+     LEFT JOIN profiles pr ON pr.user_id = p.user_id
+     LEFT JOIN profiles wo ON wo.user_id = p.wall_owner_id
+     WHERE ${whereSql}
+     ORDER BY p.created_at DESC
+     LIMIT 100`,
+    [viewerId, ...extraParams]
+  );
+
+  if (posts.length === 0) return [];
+  const postIds = posts.map((p) => p.id);
+
+  const { rows: attachments } = await pool.query(
+    "SELECT id, post_id, kind, name, mime, data FROM post_attachments WHERE post_id = ANY($1) ORDER BY id ASC",
+    [postIds]
+  );
+
+  const { rows: comments } = await pool.query(
+    `SELECT c.id, c.post_id, c.user_id, c.content, c.created_at,
+            pr.full_name, pr.avatar_url, pr.cover_theme,
+            (SELECT COUNT(*) FROM likes l WHERE l.target_type='comment' AND l.target_id=c.id)::int AS like_count,
+            EXISTS(SELECT 1 FROM likes l WHERE l.target_type='comment' AND l.target_id=c.id AND l.user_id=$2) AS liked
+     FROM comments c LEFT JOIN profiles pr ON pr.user_id = c.user_id
+     WHERE c.post_id = ANY($1)
+     ORDER BY c.created_at ASC`,
+    [postIds, viewerId]
+  );
+
+  const map = {};
+  posts.forEach((p) => (map[p.id] = { ...p, attachments: [], comments: [] }));
+  attachments.forEach((a) => map[a.post_id] && map[a.post_id].attachments.push(a));
+  comments.forEach((c) => map[c.post_id] && map[c.post_id].comments.push(c));
+  return posts.map((p) => map[p.id]);
+}
+
+// Home feed: general posts only (not wall posts)
+app.get("/api/posts", async (req, res) => {
+  try {
+    const posts = await loadEnrichedPosts(req.userId, "p.wall_owner_id IS NULL");
+    res.json(posts);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Create a post (optional text + attachments; optional wall_owner_id + mentions)
+app.post("/api/posts", async (req, res) => {
+  const { content, attachments, wall_owner_id, mentions } = req.body;
+  const list = Array.isArray(attachments) ? attachments.slice(0, MAX_ATTACHMENTS) : [];
+  const mentionList = Array.isArray(mentions)
+    ? mentions
+        .filter((m) => m && m.user_id)
+        .slice(0, 20)
+        .map((m) => ({ user_id: String(m.user_id), full_name: m.full_name || null }))
+    : [];
+  const wallOwner = wall_owner_id ? String(wall_owner_id) : null;
+
+  if ((!content || !content.trim()) && list.length === 0) {
+    return res.status(400).json({ error: "Post needs text or an attachment" });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query(
+      "INSERT INTO posts (user_id, content, wall_owner_id, mentions) VALUES ($1, $2, $3, $4::jsonb) RETURNING id",
+      [req.userId, content ? content.trim() : null, wallOwner, mentionList.length ? JSON.stringify(mentionList) : null]
+    );
+    const postId = rows[0].id;
+    for (const a of list) {
+      if (!a || !a.data) continue;
+      await client.query(
+        "INSERT INTO post_attachments (post_id, kind, name, mime, data) VALUES ($1, $2, $3, $4, $5)",
+        [postId, a.kind === "image" ? "image" : "file", a.name || null, a.mime || null, a.data]
+      );
+    }
+    await client.query("COMMIT");
+    res.json({ id: postId });
+  } catch (e) {
+    await client.query("ROLLBACK");
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+// Delete own post (cascades attachments + comments; clean up likes)
+app.delete("/api/posts/:id", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT id FROM posts WHERE id = $1 AND user_id = $2",
+      [req.params.id, req.userId]
+    );
+    if (!rows[0]) return res.status(404).json({ error: "Post not found" });
+
+    const { rows: commentRows } = await pool.query("SELECT id FROM comments WHERE post_id = $1", [req.params.id]);
+    const commentIds = commentRows.map((c) => c.id);
+    if (commentIds.length > 0) {
+      await pool.query("DELETE FROM likes WHERE target_type='comment' AND target_id = ANY($1)", [commentIds]);
+    }
+    await pool.query("DELETE FROM likes WHERE target_type='post' AND target_id = $1", [req.params.id]);
+    await pool.query("DELETE FROM posts WHERE id = $1", [req.params.id]);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Add a comment to a post
+app.post("/api/posts/:id/comments", async (req, res) => {
+  const { content } = req.body;
+  if (!content || !content.trim()) return res.status(400).json({ error: "Comment cannot be empty" });
+  try {
+    const { rows: postRows } = await pool.query("SELECT id FROM posts WHERE id = $1", [req.params.id]);
+    if (!postRows[0]) return res.status(404).json({ error: "Post not found" });
+    const { rows } = await pool.query(
+      "INSERT INTO comments (post_id, user_id, content) VALUES ($1, $2, $3) RETURNING id",
+      [req.params.id, req.userId, content.trim()]
+    );
+    res.json({ id: rows[0].id });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Delete own comment
+app.delete("/api/comments/:id", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT id FROM comments WHERE id = $1 AND user_id = $2",
+      [req.params.id, req.userId]
+    );
+    if (!rows[0]) return res.status(404).json({ error: "Comment not found" });
+    await pool.query("DELETE FROM likes WHERE target_type='comment' AND target_id = $1", [req.params.id]);
+    await pool.query("DELETE FROM comments WHERE id = $1", [req.params.id]);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Toggle a like on a post or comment
+app.post("/api/likes", async (req, res) => {
+  const { target_type, target_id } = req.body;
+  if (!["post", "comment"].includes(target_type) || !target_id) {
+    return res.status(400).json({ error: "Invalid like target" });
+  }
+  try {
+    const { rowCount } = await pool.query(
+      "DELETE FROM likes WHERE user_id = $1 AND target_type = $2 AND target_id = $3",
+      [req.userId, target_type, target_id]
+    );
+    let liked;
+    if (rowCount > 0) {
+      liked = false;
+    } else {
+      await pool.query(
+        "INSERT INTO likes (user_id, target_type, target_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+        [req.userId, target_type, target_id]
+      );
+      liked = true;
+    }
+    const { rows } = await pool.query(
+      "SELECT COUNT(*)::int AS count FROM likes WHERE target_type = $1 AND target_id = $2",
+      [target_type, target_id]
+    );
+    res.json({ liked, count: rows[0].count });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// --- Direct messages / chat ---
+
+// All other users (to start a chat with)
+app.get("/api/users", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT user_id, full_name, avatar_url, cover_theme
+       FROM profiles WHERE user_id <> $1
+       ORDER BY full_name NULLS LAST, user_id`,
+      [req.userId]
+    );
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Conversations: each chat partner with last message + unread count
+app.get("/api/conversations", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `WITH partners AS (
+         SELECT CASE WHEN sender_id = $1 THEN recipient_id ELSE sender_id END AS partner_id,
+                MAX(created_at) AS last_at
+         FROM messages
+         WHERE sender_id = $1 OR recipient_id = $1
+         GROUP BY partner_id
+       )
+       SELECT p.partner_id, p.last_at,
+              pr.full_name, pr.avatar_url, pr.cover_theme,
+              (SELECT m.content FROM messages m
+                 WHERE (m.sender_id = $1 AND m.recipient_id = p.partner_id)
+                    OR (m.sender_id = p.partner_id AND m.recipient_id = $1)
+                 ORDER BY m.created_at DESC LIMIT 1) AS last_message,
+              (SELECT m.sender_id FROM messages m
+                 WHERE (m.sender_id = $1 AND m.recipient_id = p.partner_id)
+                    OR (m.sender_id = p.partner_id AND m.recipient_id = $1)
+                 ORDER BY m.created_at DESC LIMIT 1) AS last_sender,
+              (SELECT COUNT(*) FROM messages m
+                 WHERE m.sender_id = p.partner_id AND m.recipient_id = $1 AND m.read_at IS NULL)::int AS unread
+       FROM partners p
+       LEFT JOIN profiles pr ON pr.user_id = p.partner_id
+       ORDER BY p.last_at DESC`,
+      [req.userId]
+    );
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Total unread (for the nav badge). Defined before /:userId so it isn't shadowed.
+app.get("/api/messages/unread-total", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT COUNT(*)::int AS count FROM messages WHERE recipient_id = $1 AND read_at IS NULL",
+      [req.userId]
+    );
+    res.json({ count: rows[0].count });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Thread with one user (and mark their messages to me as read)
+app.get("/api/messages/:userId", async (req, res) => {
+  const other = req.params.userId;
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, sender_id, recipient_id, content, attachments, created_at
+       FROM messages
+       WHERE (sender_id = $1 AND recipient_id = $2) OR (sender_id = $2 AND recipient_id = $1)
+       ORDER BY created_at ASC LIMIT 500`,
+      [req.userId, other]
+    );
+    await pool.query(
+      "UPDATE messages SET read_at = NOW() WHERE recipient_id = $1 AND sender_id = $2 AND read_at IS NULL",
+      [req.userId, other]
+    );
+    const { rows: peer } = await pool.query(
+      "SELECT user_id, full_name, avatar_url, cover_theme FROM profiles WHERE user_id = $1",
+      [other]
+    );
+    res.json({ messages: rows, peer: peer[0] || { user_id: other, full_name: null, avatar_url: null } });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Send a message (text and/or attachments)
+app.post("/api/messages", async (req, res) => {
+  const { recipient_id, content, attachments } = req.body;
+  const list = Array.isArray(attachments) ? attachments.slice(0, MAX_ATTACHMENTS) : [];
+  if (!recipient_id) {
+    return res.status(400).json({ error: "Recipient is required" });
+  }
+  if ((!content || !content.trim()) && list.length === 0) {
+    return res.status(400).json({ error: "Message needs text or an attachment" });
+  }
+  if (recipient_id === req.userId) {
+    return res.status(400).json({ error: "You can't message yourself" });
+  }
+  try {
+    const cleaned = list
+      .filter((a) => a && a.data)
+      .map((a) => ({ kind: a.kind === "image" ? "image" : "file", name: a.name || null, mime: a.mime || null, data: a.data }));
+    const { rows } = await pool.query(
+      `INSERT INTO messages (sender_id, recipient_id, content, attachments)
+       VALUES ($1, $2, $3, $4::jsonb)
+       RETURNING id, sender_id, recipient_id, content, attachments, created_at`,
+      [req.userId, recipient_id, content ? content.trim() : null, cleaned.length ? JSON.stringify(cleaned) : null]
+    );
+    res.json(rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Delete user account and all their data
 app.delete("/api/account", authMiddleware, async (req, res) => {
   try {
@@ -455,6 +906,18 @@ app.delete("/api/account", authMiddleware, async (req, res) => {
       await pool.query("DELETE FROM shifts WHERE month_id = ANY($1)", [monthIds]);
     }
     await pool.query("DELETE FROM months WHERE user_id = $1", [req.userId]);
+    await pool.query("DELETE FROM profiles WHERE user_id = $1", [req.userId]);
+
+    // Feed cleanup: own likes, own comments, and own posts (cascades attachments/comments)
+    const ownPosts = await pool.query("SELECT id FROM posts WHERE user_id = $1", [req.userId]);
+    const ownPostIds = ownPosts.rows.map((r) => r.id);
+    await pool.query("DELETE FROM likes WHERE user_id = $1", [req.userId]);
+    await pool.query("DELETE FROM comments WHERE user_id = $1", [req.userId]);
+    if (ownPostIds.length > 0) {
+      await pool.query("DELETE FROM likes WHERE target_type='post' AND target_id = ANY($1)", [ownPostIds]);
+    }
+    await pool.query("DELETE FROM posts WHERE user_id = $1", [req.userId]);
+    await pool.query("DELETE FROM messages WHERE sender_id = $1 OR recipient_id = $1", [req.userId]);
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });

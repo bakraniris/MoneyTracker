@@ -4,23 +4,30 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>MoneyTracker</title>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=10">
 </head>
 <body>
   <div class="app">
     <header>
       <div>
-        <h1 id="header-title" onclick="showMonthsList()">MoneyTracker</h1>
+        <h1 id="header-title" onclick="showHome()">MoneyTracker</h1>
         <p class="subtitle">Track your shifts &amp; earnings</p>
       </div>
       <div id="settings-container" class="settings-container hidden">
+        <button id="header-avatar" class="header-avatar" onclick="openProfile()" title="My Profile"></button>
         <button class="btn-settings" onclick="toggleSettingsMenu()" title="Settings">&#9881;</button>
         <div id="settings-menu" class="settings-menu hidden">
+          <button class="settings-item" onclick="openProfile()">My Profile</button>
           <button class="settings-item" onclick="handleLogout()">Log Out</button>
-          <button class="settings-item settings-danger" onclick="handleDeleteAccount()">Delete Account</button>
         </div>
       </div>
     </header>
+
+    <nav id="main-nav" class="main-nav hidden">
+      <button id="nav-home" class="nav-tab" onclick="showHome()">&#127968; Home</button>
+      <button id="nav-messages" class="nav-tab" onclick="showMessages()">&#128172; Messages<span id="nav-unread" class="nav-unread hidden">0</span></button>
+      <button id="nav-shifts" class="nav-tab" onclick="showMonthsList()">&#128197; Months</button>
+    </nav>
 
     <!-- View: Auth -->
     <section id="view-auth" class="view active">
@@ -29,25 +36,110 @@
         <div class="auth-form">
           <div class="form-group hidden" id="auth-name-group">
             <label for="auth-name">Name</label>
-            <input type="text" id="auth-name" placeholder="Your name">
+            <input type="text" id="auth-name" placeholder="Your name" autocomplete="off">
           </div>
           <div class="form-group">
             <label for="auth-email">Email</label>
-            <input type="email" id="auth-email" placeholder="you@example.com">
+            <input type="email" id="auth-email" placeholder="you@example.com" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')">
           </div>
           <div class="form-group">
             <label for="auth-password">Password</label>
             <div class="password-wrapper">
-              <input type="password" id="auth-password" placeholder="Password (min 6 chars)" onkeydown="if(event.key==='Enter'){event.preventDefault();handleAuth();}">
+              <input type="password" id="auth-password" placeholder="Password (min 6 chars)" autocomplete="new-password" readonly onfocus="this.removeAttribute('readonly')" onkeydown="if(event.key==='Enter'){event.preventDefault();handleAuth();}">
               <button type="button" class="btn-toggle-pw" onclick="togglePassword()" id="btn-toggle-pw" title="Show password">&#128065;</button>
             </div>
           </div>
           <div id="auth-error" class="auth-error hidden"></div>
           <button type="button" id="btn-auth-submit" class="btn btn-primary btn-full" onclick="handleAuth()">Log In</button>
+
+          <div class="auth-divider"><span>or</span></div>
+
+          <button type="button" class="btn btn-oauth btn-google" onclick="signInWithProvider('google')">
+            <svg class="oauth-icon" viewBox="0 0 48 48" aria-hidden="true">
+              <path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 12.955 4 4 12.955 4 24s8.955 20 20 20 20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z"/>
+              <path fill="#FF3D00" d="m6.306 14.691 6.571 4.819C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 16.318 4 9.656 8.337 6.306 14.691z"/>
+              <path fill="#4CAF50" d="M24 44c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238A11.91 11.91 0 0 1 24 36c-5.202 0-9.619-3.317-11.283-7.946l-6.522 5.025C9.505 39.556 16.227 44 24 44z"/>
+              <path fill="#1976D2" d="M43.611 20.083H42V20H24v8h11.303a12.04 12.04 0 0 1-4.087 5.571l.003-.002 6.19 5.238C36.971 39.205 44 34 44 24c0-1.341-.138-2.65-.389-3.917z"/>
+            </svg>
+            Continue with Google
+          </button>
+          <button type="button" class="btn btn-oauth btn-facebook" onclick="signInWithProvider('facebook')">
+            <svg class="oauth-icon" viewBox="0 0 24 24" aria-hidden="true" fill="#fff">
+              <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+            </svg>
+            Continue with Facebook
+          </button>
+
           <p class="auth-toggle">
             <span id="auth-toggle-text">Don't have an account?</span>
             <a href="#" id="auth-toggle-link" onclick="toggleAuthMode(event)">Sign Up</a>
           </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- View: Home Feed -->
+    <section id="view-home" class="view">
+      <div class="card composer-card">
+        <div class="composer-top">
+          <div id="composer-avatar" class="feed-avatar"></div>
+          <textarea id="composer-text" class="composer-text" rows="2" placeholder="What's on your mind?" autocomplete="off"></textarea>
+        </div>
+        <div id="composer-attachments" class="composer-attachments"></div>
+        <div class="composer-actions">
+          <div class="composer-add">
+            <label class="btn btn-ghost btn-sm" for="composer-image-input">&#128247; Photo</label>
+            <input type="file" id="composer-image-input" accept="image/*" multiple class="hidden" onchange="handleComposerImages(event)">
+            <label class="btn btn-ghost btn-sm" for="composer-file-input">&#128206; File</label>
+            <input type="file" id="composer-file-input" multiple class="hidden" onchange="handleComposerFiles(event)">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="showUserPicker('mention')">@ Mention</button>
+          </div>
+          <button id="composer-post-btn" class="btn btn-primary" onclick="submitPost()">Post</button>
+        </div>
+      </div>
+
+      <div id="feed-list" class="feed-list">
+        <p class="empty-state">Loading feed...</p>
+      </div>
+    </section>
+
+    <!-- View: Messages -->
+    <section id="view-messages" class="view">
+      <div class="card messages-card">
+        <div class="messages-layout">
+          <aside id="conversations-pane" class="conversations-pane">
+            <div class="conversations-header">
+              <h2>Messages</h2>
+              <button class="btn btn-primary btn-sm" onclick="showUserPicker()">+ New</button>
+            </div>
+            <div id="conversations-list" class="conversations-list">
+              <p class="empty-state">Loading...</p>
+            </div>
+          </aside>
+
+          <div id="chat-pane" class="chat-pane">
+            <div id="chat-empty" class="chat-empty">
+              <p>Select a conversation or start a new one.</p>
+            </div>
+            <div id="chat-thread" class="chat-thread hidden">
+              <div class="chat-header">
+                <button class="chat-back btn-icon" onclick="closeChat()" title="Back">&larr;</button>
+                <div id="chat-peer" class="chat-peer"></div>
+              </div>
+              <div id="chat-messages" class="chat-messages"></div>
+              <div id="chat-attachments" class="chat-attachments"></div>
+              <div class="chat-compose">
+                <label class="chat-attach-btn" for="chat-image-input" title="Send photo">&#128247;</label>
+                <input type="file" id="chat-image-input" accept="image/*" multiple class="hidden" onchange="handleChatImages(event)">
+                <label class="chat-attach-btn" for="chat-file-input" title="Send file">&#128206;</label>
+                <input type="file" id="chat-file-input" multiple class="hidden" onchange="handleChatFiles(event)">
+                <input type="text" id="chat-input" class="chat-input" placeholder="Type a message..."
+                  autocomplete="off"
+                  onkeydown="if(event.key==='Enter'){event.preventDefault();sendMessage();}">
+                <button class="btn btn-primary" onclick="sendMessage()">Send</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -163,6 +255,175 @@
         </div>
       </div>
     </section>
+
+    <!-- View: Profile -->
+    <section id="view-profile" class="view">
+      <div class="card profile-card">
+        <button class="btn btn-ghost btn-back profile-back" onclick="showMonthsList()">&larr; Back</button>
+
+        <!-- Display mode -->
+        <div id="profile-display">
+          <div class="profile-cover"></div>
+          <div class="profile-head">
+            <div id="profile-avatar" class="profile-avatar"></div>
+            <div class="profile-head-actions">
+              <button id="btn-edit-profile" class="btn btn-primary btn-sm" onclick="startEditProfile()">Edit Profile</button>
+              <button id="btn-message-profile" class="btn btn-secondary btn-sm hidden" onclick="messageViewedUser()">&#9993; Message</button>
+            </div>
+          </div>
+          <div class="profile-identity">
+            <h2 id="profile-name">Your Name</h2>
+            <p id="profile-headline" class="profile-headline"></p>
+          </div>
+
+          <div id="profile-bio" class="profile-bio"></div>
+
+          <div class="profile-info-grid">
+            <div class="profile-info-item" id="info-dob">
+              <span class="profile-info-icon">&#127874;</span>
+              <div><span class="profile-info-label">Date of birth</span><span class="profile-info-value" id="profile-dob"></span></div>
+            </div>
+            <div class="profile-info-item" id="info-location">
+              <span class="profile-info-icon">&#128205;</span>
+              <div><span class="profile-info-label">Location</span><span class="profile-info-value" id="profile-location"></span></div>
+            </div>
+            <div class="profile-info-item" id="info-occupation">
+              <span class="profile-info-icon">&#128188;</span>
+              <div><span class="profile-info-label">Occupation</span><span class="profile-info-value" id="profile-occupation"></span></div>
+            </div>
+            <div class="profile-info-item" id="info-education">
+              <span class="profile-info-icon">&#127891;</span>
+              <div><span class="profile-info-label">Education</span><span class="profile-info-value" id="profile-education"></span></div>
+            </div>
+            <div class="profile-info-item" id="info-website">
+              <span class="profile-info-icon">&#128279;</span>
+              <div><span class="profile-info-label">Website</span><span class="profile-info-value" id="profile-website"></span></div>
+            </div>
+            <div class="profile-info-item" id="info-email">
+              <span class="profile-info-icon">&#9993;</span>
+              <div><span class="profile-info-label">Email</span><span class="profile-info-value" id="profile-email"></span></div>
+            </div>
+          </div>
+
+          <!-- Wall / timeline -->
+          <div class="profile-wall">
+            <h3 id="wall-title" class="wall-title">Wall</h3>
+            <div class="wall-composer">
+              <textarea id="wall-text" class="wall-text" rows="2" placeholder="Write something..." autocomplete="off"></textarea>
+              <button class="btn btn-primary btn-sm" onclick="submitWallPost()">Post</button>
+            </div>
+            <div id="wall-posts" class="wall-posts feed-list"></div>
+          </div>
+        </div>
+
+        <!-- Edit mode -->
+        <div id="profile-edit" class="hidden">
+          <h2 class="profile-edit-title">Edit Profile</h2>
+
+          <div class="cover-edit-group">
+            <label class="cover-edit-label">Cover</label>
+            <div class="edit-cover-preview-wrap">
+              <div id="edit-cover-preview" class="edit-cover-preview"></div>
+              <button type="button" id="cover-menu-btn" class="cover-menu-btn" onclick="toggleCoverMenu(event)">&#128247; Edit Cover</button>
+              <div id="cover-menu" class="cover-menu hidden">
+                <button type="button" onclick="coverMenuUploadPhoto()">&#128247; Change Photo</button>
+                <button type="button" onclick="coverMenuChooseColor()">&#127912; Change Color</button>
+              </div>
+            </div>
+            <input type="file" id="cover-input" accept="image/*" class="hidden" onchange="handleCoverSelect(event)">
+            <div id="cover-swatches" class="cover-swatches hidden"></div>
+          </div>
+
+          <div class="profile-edit-avatar">
+            <div id="profile-edit-avatar-preview" class="profile-avatar profile-avatar-edit"></div>
+            <div class="profile-edit-avatar-actions">
+              <label class="btn btn-secondary btn-sm" for="avatar-input">Change Photo</label>
+              <input type="file" id="avatar-input" accept="image/*" class="hidden" onchange="handleAvatarSelect(event)">
+              <button type="button" class="btn btn-ghost btn-sm" onclick="removeAvatar()">Remove</button>
+            </div>
+          </div>
+
+          <div class="profile-form-grid">
+            <div class="form-group">
+              <label for="edit-full-name">Full Name</label>
+              <input type="text" id="edit-full-name" placeholder="Your name">
+            </div>
+            <div class="form-group">
+              <label for="edit-headline">Headline</label>
+              <input type="text" id="edit-headline" placeholder="e.g. Nurse at Rigshospitalet">
+            </div>
+            <div class="form-group">
+              <label for="edit-dob">Date of Birth</label>
+              <input type="date" id="edit-dob">
+            </div>
+            <div class="form-group">
+              <label for="edit-location">Location</label>
+              <input type="text" id="edit-location" placeholder="e.g. Copenhagen, Denmark">
+            </div>
+            <div class="form-group">
+              <label for="edit-occupation">Occupation</label>
+              <input type="text" id="edit-occupation" placeholder="e.g. Registered Nurse">
+            </div>
+            <div class="form-group">
+              <label for="edit-education">Education</label>
+              <input type="text" id="edit-education" placeholder="e.g. BSc Nursing, KU">
+            </div>
+            <div class="form-group">
+              <label for="edit-website">Website</label>
+              <input type="text" id="edit-website" placeholder="e.g. https://...">
+            </div>
+          </div>
+
+          <div class="form-group profile-bio-group">
+            <label for="edit-bio">About</label>
+            <textarea id="edit-bio" rows="3" placeholder="Tell something about yourself..."></textarea>
+          </div>
+
+          <div class="form-actions">
+            <button class="btn btn-success" onclick="saveProfile()">Save Changes</button>
+            <button class="btn btn-ghost" onclick="cancelEditProfile()">Cancel</button>
+          </div>
+
+          <!-- Change password -->
+          <div class="profile-password-section">
+            <h3>Change Password</h3>
+            <div class="profile-form-grid">
+              <div class="form-group">
+                <label for="edit-new-password">New Password</label>
+                <input type="password" id="edit-new-password" placeholder="Min 6 characters">
+              </div>
+              <div class="form-group">
+                <label for="edit-confirm-password">Confirm Password</label>
+                <input type="password" id="edit-confirm-password" placeholder="Repeat new password">
+              </div>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="changePassword()">Update Password</button>
+          </div>
+
+          <!-- Danger zone -->
+          <div class="profile-danger-section">
+            <h3>Delete Profile</h3>
+            <p class="profile-danger-text">Permanently delete your account and all your data. This cannot be undone.</p>
+            <button class="btn btn-danger btn-sm" onclick="handleDeleteAccount()">Delete My Profile</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- New Message: user picker -->
+  <div id="userpicker-modal" class="modal-overlay hidden">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <h3>New Message</h3>
+        <button class="btn-icon" onclick="closeUserPicker()" title="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <input type="text" id="userpicker-search" class="userpicker-search" placeholder="Search people..."
+          autocomplete="off" oninput="filterUserPicker()">
+        <div id="userpicker-list" class="userpicker-list"></div>
+      </div>
+    </div>
   </div>
 
   <!-- Breakdown Modal -->
@@ -179,6 +440,6 @@
   <div id="toast" class="toast hidden"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-  <script src="app.js?v=5"></script>
+  <script src="app.js?v=21"></script>
 </body>
 </html>
