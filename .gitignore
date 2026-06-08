@@ -9,3 +9,5 @@ database.db
 
 # Ignore hidden macOS files
 .DS_Store
+
+.claude/
