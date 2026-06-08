@@ -19,7 +19,10 @@ let conversationsCache = [];  // last loaded conversation list
 let usersCache = [];          // all users (for the new-message picker)
 let chatAttachments = [];     // pending attachments for the next chat message
 let lastThreadSig = '';       // signature to avoid needless thread re-renders
-let messagesChannel = null;   // Supabase Realtime subscription
+let messagesChannel = null;   // Supabase Realtime subscription (incoming messages)
+let chatChannel = null;       // Realtime broadcast channel for the open chat (typing)
+let typingHideTimer = null;   // hides the peer "typing…" indicator
+let lastTypingSent = 0;       // throttle for sending typing events
 let messagesTimer = null;     // polling while the Messages view is open
 let unreadTimer = null;       // global polling for the nav unread badge
 let editAvatarData = null;  // pending avatar data URL while editing
@@ -80,6 +83,7 @@ function resetUserState() {
   composerMentions = [];
   stopMessagesPolling();
   unsubscribeMessages();
+  leaveChatChannel();
   if (unreadTimer) { clearInterval(unreadTimer); unreadTimer = null; }
   const badge = document.getElementById('nav-unread');
   if (badge) badge.classList.add('hidden');
@@ -130,6 +134,10 @@ async function initSupabase() {
     if (event === 'SIGNED_OUT') {
       resetUserState();
       showView('view-auth');
+    }
+    // User arrived via a password-reset email link → let them set a new password
+    if (event === 'PASSWORD_RECOVERY') {
+      showView('view-reset');
     }
   });
 }
@@ -201,10 +209,13 @@ function toggleAuthMode(e) {
     authMode === 'login' ? 'Sign Up' : 'Log In';
   document.getElementById('auth-error').classList.add('hidden');
   const nameGroup = document.getElementById('auth-name-group');
+  const forgotLink = document.getElementById('forgot-link');
   if (authMode === 'signup') {
     nameGroup.classList.remove('hidden');
+    forgotLink.classList.add('hidden'); // only relevant when logging in
   } else {
     nameGroup.classList.add('hidden');
+    forgotLink.classList.remove('hidden');
   }
 }
 
@@ -255,6 +266,14 @@ async function handleAuth(e) {
 
     if (result.error) throw result.error;
 
+    // Supabase returns a user with an empty identities array when the email
+    // already exists (enumeration protection). Don't create a duplicate.
+    if (authMode === 'signup' && result.data.user && Array.isArray(result.data.user.identities)
+        && result.data.user.identities.length === 0) {
+      showExistingAccountNotice(email);
+      return;
+    }
+
     if (authMode === 'signup' && !result.data.session) {
       errorEl.textContent = 'Check your email for a confirmation link.';
       errorEl.classList.remove('hidden');
@@ -279,7 +298,13 @@ async function handleAuth(e) {
     showHome();
   } catch (err) {
     let msg = err?.message || String(err);
-    if (msg && msg.toLowerCase().includes('email not confirmed')) {
+    const low = msg.toLowerCase();
+    // Existing email on signup → guide to log in / reset instead of duplicating
+    if (authMode === 'signup' && (low.includes('already registered') || low.includes('already exists') || low.includes('already been registered'))) {
+      showExistingAccountNotice(email);
+      return;
+    }
+    if (low.includes('email not confirmed')) {
       msg += ' Check your inbox for the confirmation link, or disable "Confirm email" in Supabase Dashboard > Authentication > Providers > Email.';
     }
     errorEl.textContent = msg;
@@ -288,6 +313,71 @@ async function handleAuth(e) {
   } finally {
     btn.disabled = false;
     btn.textContent = originalText;
+  }
+}
+
+// An account with this email already exists: switch to login and nudge them
+function showExistingAccountNotice(email) {
+  if (authMode === 'signup') toggleAuthMode({ preventDefault() {} });
+  if (email) document.getElementById('auth-email').value = email;
+  const errorEl = document.getElementById('auth-error');
+  errorEl.innerHTML = 'An account with this email already exists. Please log in below — or tap <a href="#" onclick="handleForgotPassword(event)">Forgot password?</a> if you don\'t remember it.';
+  errorEl.classList.remove('hidden');
+  errorEl.style.color = '';
+}
+
+// Send a password-reset email with a link back to the app
+async function handleForgotPassword(e) {
+  if (e) e.preventDefault();
+  const errorEl = document.getElementById('auth-error');
+  const email = document.getElementById('auth-email').value.trim();
+  if (!email) {
+    errorEl.textContent = 'Enter your email above first, then tap “Forgot password?”.';
+    errorEl.classList.remove('hidden');
+    errorEl.style.color = '';
+    return;
+  }
+  try {
+    const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin,
+    });
+    if (error) throw error;
+    errorEl.textContent = `If an account exists for ${email}, a password-reset link is on its way. Check your inbox.`;
+    errorEl.classList.remove('hidden');
+    errorEl.style.color = 'var(--success)';
+  } catch (err) {
+    errorEl.textContent = err.message || 'Could not send reset email.';
+    errorEl.classList.remove('hidden');
+    errorEl.style.color = '';
+  }
+}
+
+// Set a new password after arriving from the reset email link
+async function submitNewPassword() {
+  const errorEl = document.getElementById('reset-error');
+  const pw = document.getElementById('reset-password').value;
+  const confirm = document.getElementById('reset-confirm').value;
+  errorEl.classList.add('hidden');
+  if (!pw || pw.length < 6) {
+    errorEl.textContent = 'Password must be at least 6 characters.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+  if (pw !== confirm) {
+    errorEl.textContent = 'Passwords do not match.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+  try {
+    const { error } = await supabaseClient.auth.updateUser({ password: pw });
+    if (error) throw error;
+    document.getElementById('reset-password').value = '';
+    document.getElementById('reset-confirm').value = '';
+    showToast('Password updated');
+    showHome();
+  } catch (err) {
+    errorEl.textContent = err.message || 'Could not update password.';
+    errorEl.classList.remove('hidden');
   }
 }
 
@@ -1247,6 +1337,52 @@ function unsubscribeMessages() {
   messagesChannel = null;
 }
 
+// --- Typing indicator (Realtime broadcast, per conversation) ---
+
+function joinChatChannel(peerId) {
+  leaveChatChannel();
+  if (!supabaseClient || !currentUserId || !peerId) return;
+  const key = [currentUserId, peerId].sort().join('_');
+  chatChannel = supabaseClient.channel(`chat:${key}`, { config: { broadcast: { self: false } } });
+  chatChannel.on('broadcast', { event: 'typing' }, (msg) => {
+    const from = msg.payload && msg.payload.from;
+    if (from && from === activeChatUserId) showPeerTyping();
+  });
+  chatChannel.subscribe();
+}
+
+function leaveChatChannel() {
+  if (chatChannel && supabaseClient) {
+    try { supabaseClient.removeChannel(chatChannel); } catch (e) { /* ignore */ }
+  }
+  chatChannel = null;
+  if (typingHideTimer) { clearTimeout(typingHideTimer); typingHideTimer = null; }
+  const el = document.getElementById('chat-typing');
+  if (el) el.classList.add('hidden');
+}
+
+// Called as the user types — broadcast a throttled "typing" event to the peer
+function onChatTyping() {
+  if (!chatChannel) return;
+  const now = Date.now();
+  if (now - lastTypingSent < 1500) return;
+  lastTypingSent = now;
+  try {
+    chatChannel.send({ type: 'broadcast', event: 'typing', payload: { from: currentUserId } });
+  } catch (e) { /* ignore */ }
+}
+
+// Peer is typing → show indicator, auto-hide after a short pause
+function showPeerTyping() {
+  const el = document.getElementById('chat-typing');
+  if (!el) return;
+  el.classList.remove('hidden');
+  const messagesEl = document.getElementById('chat-messages');
+  if (messagesEl) messagesEl.scrollTop = messagesEl.scrollHeight;
+  if (typingHideTimer) clearTimeout(typingHideTimer);
+  typingHideTimer = setTimeout(() => el.classList.add('hidden'), 3500);
+}
+
 async function updateUnreadBadge() {
   const badge = document.getElementById('nav-unread');
   if (!badge || !supabaseClient) return;
@@ -1331,6 +1467,7 @@ function openChat(userId, peer) {
   document.querySelector('.messages-layout').classList.add('chat-open');
   renderChatPeer();
   renderConversations(); // refresh active highlight
+  joinChatChannel(userId); // typing indicator channel
   loadThread(true);
   setTimeout(() => document.getElementById('chat-input')?.focus(), 50);
 }
@@ -1338,6 +1475,7 @@ function openChat(userId, peer) {
 function closeChat() {
   activeChatUserId = null;
   activeChatPeer = null;
+  leaveChatChannel();
   document.getElementById('chat-thread').classList.add('hidden');
   document.getElementById('chat-empty').classList.remove('hidden');
   document.querySelector('.messages-layout').classList.remove('chat-open');
@@ -1361,7 +1499,9 @@ async function loadThread(forceScroll) {
   }
   if (data.peer) { activeChatPeer = data.peer; renderChatPeer(); }
   const msgs = data.messages || [];
-  const sig = `${msgs.length}:${msgs.length ? msgs[msgs.length - 1].id : 0}`;
+  // Include read-state in the signature so the "Read" status re-renders too
+  const readMine = msgs.filter((m) => m.sender_id === currentUserId && m.read_at).length;
+  const sig = `${msgs.length}:${msgs.length ? msgs[msgs.length - 1].id : 0}:${readMine}`;
   if (sig === lastThreadSig && !forceScroll) return;
   lastThreadSig = sig;
   renderThread(msgs);
@@ -1373,15 +1513,21 @@ function renderThread(msgs) {
     el.innerHTML = '<p class="chat-empty-thread">No messages yet. Say hi! 👋</p>';
     return;
   }
-  el.innerHTML = msgs.map((m) => {
+  // Index of the last message I sent — only it shows a Read/Sent status
+  let lastMineIndex = -1;
+  msgs.forEach((m, i) => { if (m.sender_id === currentUserId) lastMineIndex = i; });
+
+  el.innerHTML = msgs.map((m, i) => {
     const mine = m.sender_id === currentUserId;
     const atts = Array.isArray(m.attachments) ? m.attachments : [];
     const attHtml = atts.map(msgAttachmentHtml).join('');
     const textHtml = m.content ? `<div class="msg-text">${escapeHtml(m.content)}</div>` : '';
+    const status = (mine && i === lastMineIndex)
+      ? `<span class="msg-status">${m.read_at ? '✓✓ Read' : '✓ Sent'}</span>` : '';
     return `
       <div class="msg ${mine ? 'mine' : 'theirs'}">
         <div class="msg-bubble">${attHtml}${textHtml}</div>
-        <div class="msg-time">${timeAgo(m.created_at)}</div>
+        <div class="msg-time">${timeAgo(m.created_at)}${status}</div>
       </div>`;
   }).join('');
   el.scrollTop = el.scrollHeight;

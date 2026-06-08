@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>MoneyTracker</title>
-  <link rel="stylesheet" href="style.css?v=10">
+  <link rel="stylesheet" href="style.css?v=12">
 </head>
 <body>
   <div class="app">
@@ -51,6 +51,7 @@
           </div>
           <div id="auth-error" class="auth-error hidden"></div>
           <button type="button" id="btn-auth-submit" class="btn btn-primary btn-full" onclick="handleAuth()">Log In</button>
+          <a href="#" id="forgot-link" class="auth-forgot" onclick="handleForgotPassword(event)">Forgot password?</a>
 
           <div class="auth-divider"><span>or</span></div>
 
@@ -74,6 +75,26 @@
             <span id="auth-toggle-text">Don't have an account?</span>
             <a href="#" id="auth-toggle-link" onclick="toggleAuthMode(event)">Sign Up</a>
           </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- View: Reset Password (after clicking email link) -->
+    <section id="view-reset" class="view">
+      <div class="card auth-card">
+        <h2>Set a New Password</h2>
+        <div class="auth-form">
+          <div class="form-group">
+            <label for="reset-password">New Password</label>
+            <input type="password" id="reset-password" placeholder="Min 6 characters">
+          </div>
+          <div class="form-group">
+            <label for="reset-confirm">Confirm Password</label>
+            <input type="password" id="reset-confirm" placeholder="Repeat new password"
+              onkeydown="if(event.key==='Enter'){event.preventDefault();submitNewPassword();}">
+          </div>
+          <div id="reset-error" class="auth-error hidden"></div>
+          <button type="button" class="btn btn-primary btn-full" onclick="submitNewPassword()">Update Password</button>
         </div>
       </div>
     </section>
@@ -127,6 +148,7 @@
                 <div id="chat-peer" class="chat-peer"></div>
               </div>
               <div id="chat-messages" class="chat-messages"></div>
+              <div id="chat-typing" class="chat-typing hidden"><span class="typing-dots"><span></span><span></span><span></span></span> typing…</div>
               <div id="chat-attachments" class="chat-attachments"></div>
               <div class="chat-compose">
                 <label class="chat-attach-btn" for="chat-image-input" title="Send photo">&#128247;</label>
@@ -134,7 +156,7 @@
                 <label class="chat-attach-btn" for="chat-file-input" title="Send file">&#128206;</label>
                 <input type="file" id="chat-file-input" multiple class="hidden" onchange="handleChatFiles(event)">
                 <input type="text" id="chat-input" class="chat-input" placeholder="Type a message..."
-                  autocomplete="off"
+                  autocomplete="off" oninput="onChatTyping()"
                   onkeydown="if(event.key==='Enter'){event.preventDefault();sendMessage();}">
                 <button class="btn btn-primary" onclick="sendMessage()">Send</button>
               </div>
@@ -440,6 +462,6 @@
   <div id="toast" class="toast hidden"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-  <script src="app.js?v=21"></script>
+  <script src="app.js?v=23"></script>
 </body>
 </html>
